@@ -25,10 +25,45 @@ relay2 = OutputDevice(RELAY_PIN_2, active_high=True, initial_value=False)
 button = Button(BUTTON_PIN)
 
 # ---------------------------
-# Helper Functions
+# Helper: Crop an image to a central square
+# ---------------------------
+def crop_center_square(cv_img):
+    h, w = cv_img.shape[:2]
+    min_dim = min(h, w)
+    start_x = (w - min_dim) // 2
+    start_y = (h - min_dim) // 2
+    return cv_img[start_y:start_y+min_dim, start_x:start_x+min_dim]
+
+# ---------------------------
+# Custom RoundedLabel Class
+# ---------------------------
+class RoundedLabel(QtWidgets.QLabel):
+    def __init__(self, radius=15, parent=None):
+        super().__init__(parent)
+        self.radius = radius
+        self.setStyleSheet("background-color: transparent;")
+        self.setScaledContents(False)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        path = QtGui.QPainterPath()
+        rectF = QtCore.QRectF(self.rect())
+        path.addRoundedRect(rectF, self.radius, self.radius)
+        painter.setClipPath(path)
+        if self.pixmap():
+            pixmap = self.pixmap()
+            scaled_pix = pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            painter.drawPixmap(self.rect(), scaled_pix)
+        else:
+            super().paintEvent(event)
+        painter.end()
+
+# ---------------------------
+# Helper Functions for Detection
 # ---------------------------
 def order_points(pts):
-    # Returns points ordered as [top-left, top-right, bottom-right, bottom-left]
     rect = np.zeros((4, 2), dtype="float32")
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]
@@ -39,17 +74,14 @@ def order_points(pts):
     return rect
 
 def update_candidates(candidates, detections):
-    # Mark all current candidates as unmatched
     for cand in candidates:
         cand['matched'] = False
-
-    # Try to match each detection with an existing candidate
     for (cx, cy) in detections:
         matched = False
         for cand in candidates:
             dist = math.hypot(cand['x'] - cx, cand['y'] - cy)
             if dist < MATCH_DIST_THRESHOLD:
-                alpha = 0.7  # responsiveness factor
+                alpha = 0.7
                 cand['x'] = alpha * cx + (1 - alpha) * cand['x']
                 cand['y'] = alpha * cy + (1 - alpha) * cand['y']
                 cand['count'] += 1
@@ -59,8 +91,6 @@ def update_candidates(candidates, detections):
                 break
         if not matched:
             candidates.append({'x': cx, 'y': cy, 'count': 1, 'lost': 0, 'matched': True})
-    
-    # Increase lost counter for unmatched candidates and remove stale ones
     for cand in candidates:
         if not cand['matched']:
             cand['lost'] += 1
@@ -70,9 +100,8 @@ def update_candidates(candidates, detections):
 # Worker Thread for Detection
 # ---------------------------
 class DetectionWorker(QtCore.QThread):
-    # Signals to update the UI
     update_main_image = QtCore.pyqtSignal(QtGui.QImage)
-    update_right_images = QtCore.pyqtSignal(dict)  # Keys: "Original", "Grayscale", "Threshold", "Rectified"
+    update_right_images = QtCore.pyqtSignal(dict)  # Keys: "Original", "Rectified", "Grayscale", "Threshold"
     update_progress = QtCore.pyqtSignal(int)
     show_message = QtCore.pyqtSignal(str)
     detection_complete = QtCore.pyqtSignal(bool, str, QtGui.QImage)  # (success, message, final image)
@@ -80,7 +109,6 @@ class DetectionWorker(QtCore.QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._running = True
-        # Flag to indicate we are waiting for a manual reset (only used after a successful detection)
         self.waiting_for_reset = False
         self.reset_mode = "manual"  # "manual" for success, "auto" for mismatch
 
@@ -100,28 +128,22 @@ class DetectionWorker(QtCore.QThread):
                 self.show_message.emit("Error: Could not read frame.")
                 break
 
-            # If waiting for manual reset after a successful detection, check button press.
             if self.waiting_for_reset and self.reset_mode == "manual":
-                # Do not overlay any text on the camera feed.
                 self.update_main_image.emit(self.convert_cv_qt(frame))
                 if button.is_pressed:
                     relay1.off()
                     relay2.off()
                     self.waiting_for_reset = False
-                    self.reset_mode = "manual"
                     condition_start_time = None
                     red_candidates.clear()
                     blue_candidates.clear()
-                    # Clear message and right panel images
                     self.show_message.emit("")
                     self.update_right_images.emit({})
-                    time.sleep(0.5)  # debounce delay
+                    time.sleep(0.5)
                 self.msleep(30)
                 continue
 
-            # --- Process frame for color detection ---
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            # Red detection (two ranges)
             lower_red1 = np.array([0, 140, 30])
             upper_red1 = np.array([10, 255, 255])
             lower_red2 = np.array([170, 140, 30])
@@ -129,12 +151,10 @@ class DetectionWorker(QtCore.QThread):
             red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
             red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
             red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-            # Blue detection
             lower_blue = np.array([100, 100, 50])
             upper_blue = np.array([140, 255, 255])
             blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
-            # --- Find contours and centroids for red blobs ---
             red_detections = []
             contours_red, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for cnt in contours_red:
@@ -145,7 +165,6 @@ class DetectionWorker(QtCore.QThread):
                         cx = int(M["m10"] / M["m00"])
                         cy = int(M["m01"] / M["m00"])
                         red_detections.append((cx, cy))
-            # --- Find blue blobs ---
             blue_detections = []
             contours_blue, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for cnt in contours_blue:
@@ -157,11 +176,9 @@ class DetectionWorker(QtCore.QThread):
                         cy = int(M["m01"] / M["m00"])
                         blue_detections.append((cx, cy))
 
-            # --- Update candidate lists ---
             update_candidates(red_candidates, red_detections)
             update_candidates(blue_candidates, blue_detections)
 
-            # --- Draw markers for stable candidates ---
             for cand in red_candidates:
                 if cand['count'] >= STABLE_COUNT_THRESHOLD:
                     cv2.drawMarker(frame, (int(cand['x']), int(cand['y'])), (0, 0, 255),
@@ -171,7 +188,6 @@ class DetectionWorker(QtCore.QThread):
                     cv2.drawMarker(frame, (int(cand['x']), int(cand['y'])), (255, 0, 0),
                                    markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
 
-            # --- Check for exactly 3 stable red and 1 stable blue blobs ---
             stable_red = [cand for cand in red_candidates if cand['count'] >= STABLE_COUNT_THRESHOLD]
             stable_blue = [cand for cand in blue_candidates if cand['count'] >= STABLE_COUNT_THRESHOLD]
             if len(stable_red) == 3 and len(stable_blue) == 1:
@@ -181,16 +197,13 @@ class DetectionWorker(QtCore.QThread):
                 progress = int((elapsed / STABLE_DURATION) * 100)
                 self.update_progress.emit(progress)
                 if elapsed >= STABLE_DURATION:
-                    # Capture the original frame (before rectification)
                     original = frame.copy()
-                    # Perspective transform
                     all_candidates = stable_red + stable_blue
                     pts = np.array([(int(cand['x']), int(cand['y'])) for cand in all_candidates], dtype="float32")
                     ordered_pts = order_points(pts)
                     dst_pts = np.array([[0, 0], [499, 0], [499, 499], [0, 499]], dtype="float32")
                     M_persp = cv2.getPerspectiveTransform(ordered_pts, dst_pts)
                     warped = cv2.warpPerspective(frame, M_persp, (500, 500))
-                    # Rotate so that the blue candidate is at bottom-left
                     blue_pt = np.array([int(stable_blue[0]['x']), int(stable_blue[0]['y'])], dtype="float32")
                     distances = [np.linalg.norm(blue_pt - pt) for pt in ordered_pts]
                     blue_index = int(np.argmin(distances))
@@ -203,19 +216,18 @@ class DetectionWorker(QtCore.QThread):
                     elif rotations_needed == 3:
                         rotated = cv2.rotate(warped, cv2.ROTATE_90_COUNTERCLOCKWISE)
                     
-                    # Process and match the rotated image (using the original as well)
-                    success, message, inter_images = self.process_and_match(rotated, original)
+                    # Crop the original image to a square before conversion.
+                    original_cropped = crop_center_square(original)
+                    success, message, inter_images = self.process_and_match(rotated, original_cropped)
                     self.update_right_images.emit(inter_images)
                     if success:
                         relay1.on()
                         relay2.on()
                         self.detection_complete.emit(True, message, self.convert_cv_qt(rotated))
-                        # Switch to manual reset mode (wait for physical button press)
                         self.waiting_for_reset = True
                         self.reset_mode = "manual"
                     else:
                         self.detection_complete.emit(False, message, self.convert_cv_qt(rotated))
-                        # Show mismatch for 10 seconds then auto-reset
                         time.sleep(10)
                         self.show_message.emit("")
                         self.update_right_images.emit({})
@@ -226,13 +238,11 @@ class DetectionWorker(QtCore.QThread):
                 condition_start_time = None
                 self.update_progress.emit(0)
 
-            # Update the main (left) panel with the (possibly annotated) camera feed.
             self.update_main_image.emit(self.convert_cv_qt(frame))
             self.msleep(30)
         cap.release()
 
     def process_and_match(self, rotated, original):
-        # Compute grid from the rectified (rotated) image.
         rotated_gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
         height, width = rotated.shape[:2]
         grid = np.zeros((5, 5), dtype=int)
@@ -252,7 +262,6 @@ class DetectionWorker(QtCore.QThread):
                 pixel = cell_thresh[center_y, center_x]
                 grid[i, j] = 1 if pixel < 128 else 0
 
-        # Load solution CSV and create solution grid.
         solution_path = 'solution.csv'
         solution_raw = pd.read_csv(solution_path, header=None).values
         solution = np.zeros((5, 5), dtype=int)
@@ -278,7 +287,7 @@ class DetectionWorker(QtCore.QThread):
             message = "Grid matches solution!"
             success = True
 
-        # Prepare intermediate images (scaled to 350x350 for a bigger display).
+        # Prepare intermediate images; all containers are fixed square 350x350.
         orig_qimg = self.convert_cv_qt(original, target_size=(350, 350))
         rectified_qimg = self.convert_cv_qt(rotated, target_size=(350, 350))
         gray_qimg = self.convert_cv_qt(cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY), isGray=True, target_size=(350, 350))
@@ -286,14 +295,13 @@ class DetectionWorker(QtCore.QThread):
         thresh_qimg = self.convert_cv_qt(thresh_img, isGray=True, target_size=(350, 350))
         inter_images = {
             "Original": orig_qimg,
+            "Rectified": rectified_qimg,
             "Grayscale": gray_qimg,
-            "Threshold": thresh_qimg,
-            "Rectified": rectified_qimg
+            "Threshold": thresh_qimg
         }
         return success, message, inter_images
 
     def convert_cv_qt(self, cv_img, isGray=False, target_size=None):
-        """Convert from an OpenCV image to QImage and scale if target_size is provided."""
         if isGray:
             qformat = QtGui.QImage.Format_Grayscale8
         else:
@@ -317,10 +325,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Detection Interface")
-        self.setGeometry(100, 100, 1200, 600)
+        self.resize(1200, 700)
         self.initUI()
         self.worker = DetectionWorker()
-        # Connect worker signals to slots.
         self.worker.update_main_image.connect(self.setMainImage)
         self.worker.update_right_images.connect(self.updateRightPanel)
         self.worker.update_progress.connect(self.setProgress)
@@ -329,12 +336,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
 
     def initUI(self):
-        # Dark mode style with larger text on the right.
         dark_stylesheet = """
         QWidget {
             background-color: #2b2b2b;
             color: #ffffff;
             font-size: 14px;
+        }
+        QFrame#rightFrame {
+            border: none;
+            background-color: #3a3a3a;
         }
         QLabel#rightMessage {
             font-size: 20px;
@@ -350,71 +360,122 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         """
         self.setStyleSheet(dark_stylesheet)
-
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
-        main_layout = QtWidgets.QHBoxLayout()
-        central_widget.setLayout(main_layout)
+        main_layout = QtWidgets.QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
 
-        # Left panel: camera feed (expanding) with progress bar below.
-        left_panel = QtWidgets.QVBoxLayout()
-        self.main_image_label = QtWidgets.QLabel()
-        self.main_image_label.setAlignment(Qt.AlignCenter)
-        self.main_image_label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        left_panel.addWidget(self.main_image_label)
+        # Left panel: camera feed with progress bar below.
+        left_frame = QtWidgets.QFrame()
+        left_layout = QtWidgets.QVBoxLayout(left_frame)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        left_layout.setSpacing(10)
+        self.main_image_label = RoundedLabel(radius=15)
+        self.main_image_label.setMinimumSize(600, 400)
+        left_layout.addWidget(self.main_image_label)
         self.left_progress_bar = QtWidgets.QProgressBar()
         self.left_progress_bar.setValue(0)
-        left_panel.addWidget(self.left_progress_bar)
-        main_layout.addLayout(left_panel, 1)
+        left_layout.addWidget(self.left_progress_bar)
+        main_layout.addWidget(left_frame, 3)
 
-        # Right panel: 2x2 grid for intermediate images and a centered message at the bottom.
-        right_panel = QtWidgets.QVBoxLayout()
+        # Right panel: intermediate images with titles.
+        right_frame = QtWidgets.QFrame()
+        right_frame.setObjectName("rightFrame")
+        right_frame.setMaximumWidth(750)
+        right_layout = QtWidgets.QVBoxLayout(right_frame)
+        right_layout.setContentsMargins(10, 10, 10, 10)
+        right_layout.setSpacing(10)
         grid_widget = QtWidgets.QWidget()
-        grid_layout = QtWidgets.QGridLayout()
-        grid_widget.setLayout(grid_layout)
-        # Create labels for intermediate images.
-        self.original_label = QtWidgets.QLabel()
-        self.original_label.setAlignment(Qt.AlignCenter)
-        self.grayscale_label = QtWidgets.QLabel()
-        self.grayscale_label.setAlignment(Qt.AlignCenter)
-        self.threshold_label = QtWidgets.QLabel()
-        self.threshold_label.setAlignment(Qt.AlignCenter)
-        self.rectified_label = QtWidgets.QLabel()
-        self.rectified_label.setAlignment(Qt.AlignCenter)
-        grid_layout.addWidget(self.original_label, 0, 0)
-        grid_layout.addWidget(self.grayscale_label, 0, 1)
-        grid_layout.addWidget(self.threshold_label, 1, 0)
-        grid_layout.addWidget(self.rectified_label, 1, 1)
-        right_panel.addWidget(grid_widget)
-        # Message label at the bottom of the right panel.
+        grid_layout = QtWidgets.QGridLayout(grid_widget)
+        grid_layout.setContentsMargins(5, 5, 5, 5)
+        grid_layout.setSpacing(10)
+        # Create container for Original image.
+        self.containerOriginal = QtWidgets.QWidget()
+        layoutOrig = QtWidgets.QVBoxLayout(self.containerOriginal)
+        layoutOrig.setContentsMargins(0, 0, 0, 0)
+        layoutOrig.setSpacing(5)
+        self.original_title = QtWidgets.QLabel("Original")
+        self.original_title.setAlignment(Qt.AlignCenter)
+        self.original_image = RoundedLabel(radius=15)
+        self.original_image.setFixedSize(350, 350)
+        layoutOrig.addWidget(self.original_title)
+        layoutOrig.addWidget(self.original_image)
+        # Create container for Rectified image.
+        self.containerRectified = QtWidgets.QWidget()
+        layoutRect = QtWidgets.QVBoxLayout(self.containerRectified)
+        layoutRect.setContentsMargins(0, 0, 0, 0)
+        layoutRect.setSpacing(5)
+        self.rectified_title = QtWidgets.QLabel("Rectified")
+        self.rectified_title.setAlignment(Qt.AlignCenter)
+        self.rectified_image = RoundedLabel(radius=15)
+        self.rectified_image.setFixedSize(350, 350)
+        layoutRect.addWidget(self.rectified_title)
+        layoutRect.addWidget(self.rectified_image)
+        # Create container for Gray image.
+        self.containerGray = QtWidgets.QWidget()
+        layoutGray = QtWidgets.QVBoxLayout(self.containerGray)
+        layoutGray.setContentsMargins(0, 0, 0, 0)
+        layoutGray.setSpacing(5)
+        self.gray_title = QtWidgets.QLabel("Gray")
+        self.gray_title.setAlignment(Qt.AlignCenter)
+        self.gray_image = RoundedLabel(radius=15)
+        self.gray_image.setFixedSize(350, 350)
+        layoutGray.addWidget(self.gray_title)
+        layoutGray.addWidget(self.gray_image)
+        # Create container for Thresholded image.
+        self.containerThresholded = QtWidgets.QWidget()
+        layoutThresh = QtWidgets.QVBoxLayout(self.containerThresholded)
+        layoutThresh.setContentsMargins(0, 0, 0, 0)
+        layoutThresh.setSpacing(5)
+        self.threshold_title = QtWidgets.QLabel("Thresholded")
+        self.threshold_title.setAlignment(Qt.AlignCenter)
+        self.threshold_image = RoundedLabel(radius=15)
+        self.threshold_image.setFixedSize(350, 350)
+        layoutThresh.addWidget(self.threshold_title)
+        layoutThresh.addWidget(self.threshold_image)
+        # Add containers to the grid in the desired order.
+        grid_layout.addWidget(self.containerOriginal, 0, 0)
+        grid_layout.addWidget(self.containerRectified, 0, 1)
+        grid_layout.addWidget(self.containerGray, 1, 0)
+        grid_layout.addWidget(self.containerThresholded, 1, 1)
+        right_layout.addWidget(grid_widget)
         self.right_message_label = QtWidgets.QLabel("")
         self.right_message_label.setObjectName("rightMessage")
         self.right_message_label.setAlignment(Qt.AlignCenter)
-        right_panel.addWidget(self.right_message_label)
-        main_layout.addLayout(right_panel, 1)
+        right_layout.addWidget(self.right_message_label)
+        main_layout.addWidget(right_frame, 1)
 
     def setMainImage(self, qimg):
-        # Scale the incoming image to the current size of the main_image_label.
         pixmap = QtGui.QPixmap.fromImage(qimg)
         scaled = pixmap.scaled(self.main_image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.main_image_label.setPixmap(scaled)
 
     def updateRightPanel(self, images):
-        # If the dictionary is empty, clear the images.
+        # If the dictionary is empty, clear all images and hide titles.
         if not images:
-            self.original_label.clear()
-            self.grayscale_label.clear()
-            self.threshold_label.clear()
-            self.rectified_label.clear()
+            self.original_image.clear()
+            self.rectified_image.clear()
+            self.gray_image.clear()
+            self.threshold_image.clear()
+            self.original_title.hide()
+            self.rectified_title.hide()
+            self.gray_title.hide()
+            self.threshold_title.hide()
             return
+        # Otherwise, show titles and update images.
+        self.original_title.show()
+        self.rectified_title.show()
+        self.gray_title.show()
+        self.threshold_title.show()
         if "Original" in images:
-            self.original_label.setPixmap(QtGui.QPixmap.fromImage(images["Original"]))
-        if "Grayscale" in images:
-            self.grayscale_label.setPixmap(QtGui.QPixmap.fromImage(images["Grayscale"]))
-        if "Threshold" in images:
-            self.threshold_label.setPixmap(QtGui.QPixmap.fromImage(images["Threshold"]))
+            self.original_image.setPixmap(QtGui.QPixmap.fromImage(images["Original"]))
         if "Rectified" in images:
-            self.rectified_label.setPixmap(QtGui.QPixmap.fromImage(images["Rectified"]))
+            self.rectified_image.setPixmap(QtGui.QPixmap.fromImage(images["Rectified"]))
+        if "Grayscale" in images:
+            self.gray_image.setPixmap(QtGui.QPixmap.fromImage(images["Grayscale"]))
+        if "Threshold" in images:
+            self.threshold_image.setPixmap(QtGui.QPixmap.fromImage(images["Threshold"]))
 
     def setProgress(self, value):
         self.left_progress_bar.setValue(value)
