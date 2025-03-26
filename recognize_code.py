@@ -3,6 +3,7 @@ import numpy as np
 import math
 import time
 import pandas as pd
+from gpiozero import OutputDevice, Button
 
 # Parameters for temporal filtering
 MATCH_DIST_THRESHOLD = 20      # Maximum distance (in pixels) for matching detections across frames
@@ -11,6 +12,14 @@ LOST_FRAME_THRESHOLD = 3       # Maximum frames a candidate can be missing befor
 
 # Duration (in seconds) that the detection must be stable before processing the image
 STABLE_DURATION = 3.0
+
+RELAY_PIN_1 = 20
+RELAY_PIN_2 = 21
+BUTTON_PIN = 2
+
+relay1 = OutputDevice(RELAY_PIN_1, active_high=True, initial_value=False)
+relay2 = OutputDevice(RELAY_PIN_2, active_high=True, initial_value=False)
+button = Button(BUTTON_PIN)
 
 def order_points(pts):
     # Returns points ordered as [top-left, top-right, bottom-right, bottom-left]
@@ -53,10 +62,6 @@ def update_candidates(candidates, detections):
 
     # Remove candidates that have been missing for too many frames
     candidates[:] = [cand for cand in candidates if cand['lost'] <= LOST_FRAME_THRESHOLD]
-
-import cv2
-import numpy as np
-import pandas as pd
 
 def process_and_match(rotated):
     # Convert to grayscale
@@ -117,7 +122,8 @@ def process_and_match(rotated):
             print(f"Mismatch for game {cell_number} (Row {row}, Column {col})")
     else:
         print("Grid matches the solution!")
-
+        relay1.on()
+        relay2.on()
 
 def main():
     cap = cv2.VideoCapture(0)
@@ -125,25 +131,46 @@ def main():
         print("Error: Could not open video capture.")
         return
 
-    # Lists to store candidates for red and blue blobs
     red_candidates = []
     blue_candidates = []
     
     # Variable to track when the condition became stable
     condition_start_time = None
 
+    # Flag to block new detection until the button is pressed.
+    waiting_for_button = False
+
     while True:
         ret, frame = cap.read()
         if not ret:
             print("Error: Could not read frame.")
             break
-        
+
+        # If we're waiting for the user to press the button to reset, skip detection.
+        if waiting_for_button:
+            cv2.putText(frame, "Press button to reset", (50, 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.imshow("Camera Feed", frame)
+            if button.is_pressed:
+                # Button press resets the system and turns off the relays.
+                relay1.off()
+                relay2.off()
+                waiting_for_button = False
+                condition_start_time = None
+                red_candidates.clear()
+                blue_candidates.clear()
+                print("System reset. Ready for new detection.")
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            continue
+
+        # Convert frame to HSV and detect colors
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
         # --- Detecting Red Blobs ---
-        lower_red1 = np.array([0, 100, 30])
-        upper_red1 = np.array([20, 255, 255])
-        lower_red2 = np.array([170, 100, 30])
+        lower_red1 = np.array([0, 140, 30])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([170, 140, 30])
         upper_red2 = np.array([180, 255, 255])
         red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
         red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
@@ -178,7 +205,7 @@ def main():
                     cy = int(M["m01"] / M["m00"])
                     blue_detections.append((cx, cy))
         
-        # Update candidates with current detections
+        # Update candidate lists with current detections
         update_candidates(red_candidates, red_detections)
         update_candidates(blue_candidates, blue_detections)
         
@@ -234,18 +261,11 @@ def main():
                 # --- Match the processed image (rotated) against the solution ---
                 process_and_match(rotated)
                 
-                cv2.putText(frame, "Picture Processed!", (50, 100),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                cv2.imshow("Processed Image", rotated)
-                cv2.imshow("Camera Feed", frame)
-                cv2.waitKey(2000)  # Display the processed image for 2 seconds
-                
-                # Reset the condition and optionally clear candidate lists to avoid immediate re-triggering
-                condition_start_time = None
-                red_candidates.clear()
-                blue_candidates.clear()
+                # Set flag to wait for the user to press the button before restarting detection.
+                waiting_for_button = True
+
         else:
-            # Reset timer if the condition is not continuously met
+            # Reset the timer if the condition is not continuously met.
             condition_start_time = None
 
         cv2.imshow("Camera Feed", frame)
