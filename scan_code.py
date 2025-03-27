@@ -1,3 +1,7 @@
+from PyQt5.QtCore import QCoreApplication, Qt
+QCoreApplication.setAttribute(Qt.AA_X11InitThreads)
+QCoreApplication.setAttribute(Qt.AA_UseSoftwareOpenGL)
+
 import os
 os.environ["QT_QPA_PLATFORM"] = "xcb"
 
@@ -526,9 +530,6 @@ class MainWindow(QtWidgets.QMainWindow):
 # ---------------------------
 # Application Entry Point
 # ---------------------------
-
-from PyQt5.QtCore import QCoreApplication, Qt
-QCoreApplication.setAttribute(Qt.AA_X11InitThreads)
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
