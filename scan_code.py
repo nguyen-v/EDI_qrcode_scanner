@@ -435,6 +435,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Image Detection Interface")
         self.resize(1200, 700)
         self.initUI()
+        self.setCursor(QtGui.QCursor(QtCore.Qt.BlankCursor))
 
     def showEvent(self, event):
         super().showEvent(event)
