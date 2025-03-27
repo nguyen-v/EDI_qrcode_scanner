@@ -435,7 +435,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Image Detection Interface")
         self.resize(1200, 700)
         self.initUI()
-        self.setCursor(QtGui.QCursor(QtCore.Qt.BlankCursor))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -443,6 +442,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.setWindowState(self.windowState() | Qt.WindowFullScreen)  # Still disabled for debugging
             self._fullscreened = True
             QtCore.QTimer.singleShot(1000, self.start_worker)  # Delay by 1 second
+            self.setCursor(Qt.BlankCursor)
 
     def start_worker(self):
         self.worker = DetectionWorker()
