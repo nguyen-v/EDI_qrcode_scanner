@@ -338,6 +338,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.detection_complete.connect(self.handleDetectionComplete)
         self.worker.start()
 
+    def showEvent(self, event):
+            super().showEvent(event)
+            if not hasattr(self, "_fullscreened"):
+                self.setWindowState(self.windowState() | Qt.WindowFullScreen)
+                self._fullscreened = True
+
     def initUI(self):
         dark_stylesheet = """
         QWidget {
@@ -523,5 +529,5 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     window = MainWindow()
-    QtCore.QTimer.singleShot(500, window.showFullScreen)
+    window.show()
     sys.exit(app.exec_())
