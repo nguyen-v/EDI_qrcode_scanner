@@ -104,8 +104,7 @@ def update_candidates(candidates, detections):
 # ---------------------------
 class DetectionWorker(QtCore.QThread):
     update_main_image = QtCore.pyqtSignal(QtGui.QImage)
-    # Now the keys are "Original", "Rectified", "Grayscale", "Threshold"
-    update_right_images = QtCore.pyqtSignal(dict)
+    update_right_images = QtCore.pyqtSignal(dict)  # Keys: "Original", "Rectified", "Grayscale", "Threshold"
     update_progress = QtCore.pyqtSignal(int)
     show_message = QtCore.pyqtSignal(str)
     detection_complete = QtCore.pyqtSignal(bool, str, QtGui.QImage)  # (success, message, final image)
@@ -285,7 +284,7 @@ class DetectionWorker(QtCore.QThread):
             message = "Erreurs: " + ", ".join(sorted(mismatch_games))
             success = False
         else:
-            message = "La solution est correcte!"
+            message = "Le code est correct!"
             success = True
 
         # Build intermediate QImages exactly as before
@@ -304,7 +303,6 @@ class DetectionWorker(QtCore.QThread):
         }
 
         return success, message, inter_images
-
 
     def convert_cv_qt(self, cv_img, isGray=False, target_size=None):
         if isGray:
@@ -330,7 +328,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Detection Interface")
-        self.showFullScreen()  # Run in full screen
+        self.resize(1200, 700)
         self.initUI()
         self.worker = DetectionWorker()
         self.worker.update_main_image.connect(self.setMainImage)
@@ -401,9 +399,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutOrig.setContentsMargins(0, 0, 0, 0)
         layoutOrig.setSpacing(5)
         self.original_title = QtWidgets.QLabel("Original")
-        self.original_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.original_title.setAlignment(Qt.AlignCenter)
-        self.original_title.hide()  # hidden at startup
+        self.original_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.original_image = RoundedLabel(radius=15)
         self.original_image.setFixedSize(350, 350)
         layoutOrig.addWidget(self.original_title)
@@ -414,9 +411,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutRect.setContentsMargins(0, 0, 0, 0)
         layoutRect.setSpacing(5)
         self.rectified_title = QtWidgets.QLabel("Rectifié")
-        self.rectified_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.rectified_title.setAlignment(Qt.AlignCenter)
-        self.rectified_title.hide()
+        self.rectified_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.rectified_image = RoundedLabel(radius=15)
         self.rectified_image.setFixedSize(350, 350)
         layoutRect.addWidget(self.rectified_title)
@@ -427,9 +423,8 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutGray.setContentsMargins(0, 0, 0, 0)
         layoutGray.setSpacing(5)
         self.gray_title = QtWidgets.QLabel("Noir/Blanc")
-        self.gray_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.gray_title.setAlignment(Qt.AlignCenter)
-        self.gray_title.hide()
+        self.gray_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.gray_image = RoundedLabel(radius=15)
         self.gray_image.setFixedSize(350, 350)
         layoutGray.addWidget(self.gray_title)
@@ -440,13 +435,18 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutThresh.setContentsMargins(0, 0, 0, 0)
         layoutThresh.setSpacing(5)
         self.threshold_title = QtWidgets.QLabel("Seuillage")
-        self.threshold_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.threshold_title.setAlignment(Qt.AlignCenter)
-        self.threshold_title.hide()
+        self.threshold_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.threshold_image = RoundedLabel(radius=15)
         self.threshold_image.setFixedSize(350, 350)
         layoutThresh.addWidget(self.threshold_title)
         layoutThresh.addWidget(self.threshold_image)
+
+        self.original_title.hide()
+        self.rectified_title.hide()
+        self.gray_title.hide()
+        self.threshold_title.hide()
+
         # Add containers to the grid in the desired order.
         grid_layout.addWidget(self.containerOriginal, 0, 0)
         grid_layout.addWidget(self.containerRectified, 0, 1)
@@ -465,7 +465,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_image_label.setPixmap(scaled)
 
     def updateRightPanel(self, images):
-        # If images dictionary is empty, clear images and hide titles.
+        # If the dictionary is empty, clear all images and hide titles.
         if not images:
             self.original_image.clear()
             self.rectified_image.clear()
@@ -476,7 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.gray_title.hide()
             self.threshold_title.hide()
             return
-        # Otherwise, show titles (with larger bold text) and update images.
+        # Otherwise, show titles and update images.
         self.original_title.show()
         self.rectified_title.show()
         self.gray_title.show()
@@ -497,8 +497,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.right_message_label.setText(message)
 
     def handleDetectionComplete(self, success, message, final_qimg):
+        # Set the final image
         self.setMainImage(final_qimg)
-        self.right_message_label.setText(message)
+        # Override the default message text
+        if success:
+            display_text = "Code correct détecté. Ouverture du coffre..."
+            color = "#90EE90"
+        else:
+            display_text = message  # already prefixed with “Erreurs: …”
+            color = "red"
+        # Apply text + color
+        self.right_message_label.setText(display_text)
+        self.right_message_label.setStyleSheet(f"color: {color};")
+        # Reset progress bar
         self.left_progress_bar.setValue(0)
 
     def closeEvent(self, event):
@@ -512,5 +523,5 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     window = MainWindow()
-    window.showFullScreen()
+    QtCore.QTimer.singleShot(500, window.showFullScreen)
     sys.exit(app.exec_())

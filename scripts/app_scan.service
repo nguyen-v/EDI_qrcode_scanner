@@ -1,0 +1,12 @@
+[Unit]
+Description=QR Scanner GUI
+
+[Service]
+Type=simple
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XAUTHORITY=%h/.Xauthority
+ExecStart=/usr/bin/python3 /home/qr_scanner/Desktop/EDI_qrcode_scanner/scan_code.py
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
