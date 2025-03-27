@@ -330,6 +330,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Image Detection Interface")
         self.resize(1200, 700)
         self.initUI()
+
         self.worker = DetectionWorker()
         self.worker.update_main_image.connect(self.setMainImage)
         self.worker.update_right_images.connect(self.updateRightPanel)
@@ -339,10 +340,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
 
     def showEvent(self, event):
-            super().showEvent(event)
-            if not hasattr(self, "_fullscreened"):
-                self.setWindowState(self.windowState() | Qt.WindowFullScreen)
-                self._fullscreened = True
+        super().showEvent(event)
+        if not hasattr(self, "_fullscreened"):
+            self.setWindowState(self.windowState() | Qt.WindowFullScreen)
+            self._fullscreened = True
 
     def initUI(self):
         dark_stylesheet = """
@@ -525,6 +526,9 @@ class MainWindow(QtWidgets.QMainWindow):
 # ---------------------------
 # Application Entry Point
 # ---------------------------
+
+from PyQt5.QtCore import QCoreApplication, Qt
+QCoreApplication.setAttribute(Qt.AA_X11InitThreads)
 if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
