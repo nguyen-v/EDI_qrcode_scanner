@@ -1,3 +1,6 @@
+import os
+os.environ["QT_QPA_PLATFORM"] = "xcb"
+
 import cv2
 import numpy as np
 import math
@@ -101,7 +104,8 @@ def update_candidates(candidates, detections):
 # ---------------------------
 class DetectionWorker(QtCore.QThread):
     update_main_image = QtCore.pyqtSignal(QtGui.QImage)
-    update_right_images = QtCore.pyqtSignal(dict)  # Keys: "Original", "Rectified", "Grayscale", "Threshold"
+    # Now the keys are "Original", "Rectified", "Grayscale", "Threshold"
+    update_right_images = QtCore.pyqtSignal(dict)
     update_progress = QtCore.pyqtSignal(int)
     show_message = QtCore.pyqtSignal(str)
     detection_complete = QtCore.pyqtSignal(bool, str, QtGui.QImage)  # (success, message, final image)
@@ -113,7 +117,7 @@ class DetectionWorker(QtCore.QThread):
         self.reset_mode = "manual"  # "manual" for success, "auto" for mismatch
 
     def run(self):
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
         if not cap.isOpened():
             self.show_message.emit("Error: Could not open video capture.")
             return
@@ -228,7 +232,7 @@ class DetectionWorker(QtCore.QThread):
                         self.reset_mode = "manual"
                     else:
                         self.detection_complete.emit(False, message, self.convert_cv_qt(rotated))
-                        time.sleep(10)
+                        self.msleep(10000)
                         self.show_message.emit("")
                         self.update_right_images.emit({})
                         condition_start_time = None
@@ -243,63 +247,64 @@ class DetectionWorker(QtCore.QThread):
         cap.release()
 
     def process_and_match(self, rotated, original):
+        # Build the 5×5 binary grid from the rectified image
         rotated_gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
         height, width = rotated.shape[:2]
         grid = np.zeros((5, 5), dtype=int)
-        step_x = width // 5
-        step_y = height // 5
+        step_x, step_y = width // 5, height // 5
 
         for i in range(5):
             for j in range(5):
-                x_start = j * step_x
-                y_start = i * step_y
-                x_end = x_start + step_x
-                y_end = y_start + step_y
-                cell_region = rotated_gray[y_start:y_end, x_start:x_end]
-                _, cell_thresh = cv2.threshold(cell_region, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                center_y = (y_end - y_start) // 2
-                center_x = (x_end - x_start) // 2
-                pixel = cell_thresh[center_y, center_x]
-                grid[i, j] = 1 if pixel < 128 else 0
+                x0, y0 = j * step_x, i * step_y
+                cell = rotated_gray[y0:y0+step_y, x0:x0+step_x]
+                _, thresh = cv2.threshold(cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                cy, cx = step_y // 2, step_x // 2
+                grid[i, j] = 1 if thresh[cy, cx] < 128 else 0
 
-        solution_path = 'solution.csv'
-        solution_raw = pd.read_csv(solution_path, header=None).values
-        solution = np.zeros((5, 5), dtype=int)
-        cell_numbers = np.zeros((5, 5), dtype=int)
+        # Load solution.csv as strings
+        solution_df = pd.read_csv('solution.csv', header=None, dtype=str)
+        solution_bool = np.zeros((5, 5), dtype=int)
+        solution_label = np.empty((5, 5), dtype=object)
+
         for i in range(5):
             for j in range(5):
-                cell_str = str(solution_raw[i, j]).strip()
-                cell_numbers[i, j] = int(cell_str.replace('#', '').strip())
-                solution[i, j] = 1 if '#' in cell_str else 0
+                raw = solution_df.iat[i, j].strip()
+                if raw.startswith("#"):
+                    solution_bool[i, j] = 1
+                    solution_label[i, j] = raw.lstrip("#").strip()
+                else:
+                    solution_bool[i, j] = 0
+                    solution_label[i, j] = raw
 
-        mismatches = []
-        for i in range(5):
-            for j in range(5):
-                if grid[i, j] != solution[i, j]:
-                    cell_number = cell_numbers[i, j]
-                    mismatches.append((cell_number, i + 1, j + 1))
-        if mismatches:
-            message = ""
-            for cell_number, row, col in mismatches:
-                message += f"Mismatch for game {cell_number} (Row {row}, Col {col})\n"
+        # Compare and collect mismatches by name
+        mismatch_games = { solution_label[i, j]
+                        for i in range(5) for j in range(5)
+                        if grid[i, j] != solution_bool[i, j] }
+
+        if mismatch_games:
+            message = "Erreurs: " + ", ".join(sorted(mismatch_games))
             success = False
         else:
-            message = "Grid matches solution!"
+            message = "La solution est correcte!"
             success = True
 
-        # Prepare intermediate images; all containers are fixed square 350x350.
+        # Build intermediate QImages exactly as before
         orig_qimg = self.convert_cv_qt(original, target_size=(350, 350))
-        rectified_qimg = self.convert_cv_qt(rotated, target_size=(350, 350))
-        gray_qimg = self.convert_cv_qt(cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY), isGray=True, target_size=(350, 350))
+        rect_qimg = self.convert_cv_qt(rotated, target_size=(350, 350))
+        gray_qimg = self.convert_cv_qt(cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY),
+                                    isGray=True, target_size=(350, 350))
         _, thresh_img = cv2.threshold(rotated_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         thresh_qimg = self.convert_cv_qt(thresh_img, isGray=True, target_size=(350, 350))
+
         inter_images = {
             "Original": orig_qimg,
-            "Rectified": rectified_qimg,
+            "Rectified": rect_qimg,
             "Grayscale": gray_qimg,
             "Threshold": thresh_qimg
         }
+
         return success, message, inter_images
+
 
     def convert_cv_qt(self, cv_img, isGray=False, target_size=None):
         if isGray:
@@ -325,7 +330,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image Detection Interface")
-        self.resize(1200, 700)
+        self.showFullScreen()  # Run in full screen
         self.initUI()
         self.worker = DetectionWorker()
         self.worker.update_main_image.connect(self.setMainImage)
@@ -396,7 +401,9 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutOrig.setContentsMargins(0, 0, 0, 0)
         layoutOrig.setSpacing(5)
         self.original_title = QtWidgets.QLabel("Original")
+        self.original_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.original_title.setAlignment(Qt.AlignCenter)
+        self.original_title.hide()  # hidden at startup
         self.original_image = RoundedLabel(radius=15)
         self.original_image.setFixedSize(350, 350)
         layoutOrig.addWidget(self.original_title)
@@ -406,8 +413,10 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutRect = QtWidgets.QVBoxLayout(self.containerRectified)
         layoutRect.setContentsMargins(0, 0, 0, 0)
         layoutRect.setSpacing(5)
-        self.rectified_title = QtWidgets.QLabel("Rectified")
+        self.rectified_title = QtWidgets.QLabel("Rectifié")
+        self.rectified_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.rectified_title.setAlignment(Qt.AlignCenter)
+        self.rectified_title.hide()
         self.rectified_image = RoundedLabel(radius=15)
         self.rectified_image.setFixedSize(350, 350)
         layoutRect.addWidget(self.rectified_title)
@@ -417,8 +426,10 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutGray = QtWidgets.QVBoxLayout(self.containerGray)
         layoutGray.setContentsMargins(0, 0, 0, 0)
         layoutGray.setSpacing(5)
-        self.gray_title = QtWidgets.QLabel("Gray")
+        self.gray_title = QtWidgets.QLabel("Noir/Blanc")
+        self.gray_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.gray_title.setAlignment(Qt.AlignCenter)
+        self.gray_title.hide()
         self.gray_image = RoundedLabel(radius=15)
         self.gray_image.setFixedSize(350, 350)
         layoutGray.addWidget(self.gray_title)
@@ -428,8 +439,10 @@ class MainWindow(QtWidgets.QMainWindow):
         layoutThresh = QtWidgets.QVBoxLayout(self.containerThresholded)
         layoutThresh.setContentsMargins(0, 0, 0, 0)
         layoutThresh.setSpacing(5)
-        self.threshold_title = QtWidgets.QLabel("Thresholded")
+        self.threshold_title = QtWidgets.QLabel("Seuillage")
+        self.threshold_title.setStyleSheet("font-size: 32px; font-weight: bold;")
         self.threshold_title.setAlignment(Qt.AlignCenter)
+        self.threshold_title.hide()
         self.threshold_image = RoundedLabel(radius=15)
         self.threshold_image.setFixedSize(350, 350)
         layoutThresh.addWidget(self.threshold_title)
@@ -452,7 +465,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.main_image_label.setPixmap(scaled)
 
     def updateRightPanel(self, images):
-        # If the dictionary is empty, clear all images and hide titles.
+        # If images dictionary is empty, clear images and hide titles.
         if not images:
             self.original_image.clear()
             self.rectified_image.clear()
@@ -463,7 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.gray_title.hide()
             self.threshold_title.hide()
             return
-        # Otherwise, show titles and update images.
+        # Otherwise, show titles (with larger bold text) and update images.
         self.original_title.show()
         self.rectified_title.show()
         self.gray_title.show()
@@ -499,5 +512,5 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     window = MainWindow()
-    window.show()
+    window.showFullScreen()
     sys.exit(app.exec_())
