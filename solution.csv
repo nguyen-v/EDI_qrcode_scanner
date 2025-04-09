@@ -1,5 +1,5 @@
-IA,#IA,IA,#IA,IA
-Robots mobiles,Robots mobiles,Robots mobiles,Surveillance,Surveillance
-Pédago,#Pédago,#Robots mobiles,#Surveillance,Surveillance
-#Pédago,#Pédago,#Robots mobiles,#Surveillance,#Mécanique
-#Pédago,Pédago,Mécanique,Mécanique,#Mécanique
+#IA,IA,#IA,IA,#IA
+#Robots mobiles,Robots mobiles,Robots mobiles,#Surveillance,Surveillance
+Pédago,#Pédago,#Robots mobiles,Surveillance,#Surveillance
+Pédago,#Pédago,Robots mobiles,Surveillance,#Mécanique
+#Pédago,#Pédago,#Mécanique,Mécanique,Mécanique

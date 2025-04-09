@@ -108,18 +108,6 @@ def update_candidates(candidates, detections):
 # ---------------------------
 # Worker Thread for Detection
 # ---------------------------
-class DetectionWorker(QtCore.QThread):
-    update_main_image = QtCore.pyqtSignal(QtGui.QImage)
-    update_right_images = QtCore.pyqtSignal(dict)  # Keys: "Original", "Rectified", "Grayscale", "Threshold"
-    update_progress = QtCore.pyqtSignal(int)
-    show_message = QtCore.pyqtSignal(str)
-    detection_complete = QtCore.pyqtSignal(bool, str, QtGui.QImage)  # (success, message, final image)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._running = True
-        self.waiting_for_reset = False
-        self.reset_mode = "manual"  # "manual" for success, "auto" for mismatch
 
 class DetectionWorker(QtCore.QThread):
     update_main_image = QtCore.pyqtSignal(QtGui.QImage)
@@ -135,7 +123,7 @@ class DetectionWorker(QtCore.QThread):
         self.reset_mode = "manual"
 
     def run(self):
-        logger.debug("Worker thread started")
+        # logger.debug("Worker thread started")
         time.sleep(5)  # Keep the 5-second delay
         
         try:
@@ -152,8 +140,9 @@ class DetectionWorker(QtCore.QThread):
             frame_count = 0
 
             while self._running:
-                logger.debug("Reading frame")
+                # logger.debug("Reading frame")
                 ret, frame = cap.read()
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
                 if not ret:
                     logger.error("Could not read frame")
                     self.show_message.emit("Error: Could not read frame.")
@@ -163,11 +152,11 @@ class DetectionWorker(QtCore.QThread):
                 if frame_count % 10 == 0:
                     process = psutil.Process(os.getpid())
                     mem_usage = process.memory_info().rss / (1024 * 1024)  # in MB
-                    logger.debug(f"Memory usage: {mem_usage:.2f} MB")
+                    # logger.debug(f"Memory usage: {mem_usage:.2f} MB")
 
-                logger.debug("Checking reset condition")
+                # logger.debug("Checking reset condition")
                 if self.waiting_for_reset and self.reset_mode == "manual":
-                    logger.debug("Emitting main image for reset")
+                    # logger.debug("Emitting main image for reset")
                     qimg = self.convert_cv_qt(frame)
                     if not qimg.isNull():
                         self.update_main_image.emit(qimg)
@@ -185,52 +174,52 @@ class DetectionWorker(QtCore.QThread):
                     self.msleep(30)
                     continue
 
-                logger.debug("Converting to HSV")
+                # logger.debug("Converting to HSV")
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-                logger.debug("Creating red masks")
-                lower_red1 = np.array([0, 140, 30])
+                # logger.debug("Creating red masks")
+                lower_red1 = np.array([0, 100, 70])
                 upper_red1 = np.array([10, 255, 255])
-                lower_red2 = np.array([170, 140, 30])
+                lower_red2 = np.array([170, 100, 70])
                 upper_red2 = np.array([180, 255, 255])
                 red_mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
                 red_mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
                 red_mask = cv2.bitwise_or(red_mask1, red_mask2)
 
-                logger.debug("Creating blue mask")
+                # logger.debug("Creating blue mask")
                 lower_blue = np.array([100, 100, 50])
                 upper_blue = np.array([140, 255, 255])
                 blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
-                logger.debug("Finding red contours")
+                # logger.debug("Finding red contours")
                 red_detections = []
                 contours_red, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 for cnt in contours_red:
                     area = cv2.contourArea(cnt)
-                    if 100 < area < 400:
+                    if 200 < area < 800:
                         M = cv2.moments(cnt)
                         if M["m00"] != 0:
                             cx = int(M["m10"] / M["m00"])
                             cy = int(M["m01"] / M["m00"])
                             red_detections.append((cx, cy))
 
-                logger.debug("Finding blue contours")
+                # logger.debug("Finding blue contours")
                 blue_detections = []
                 contours_blue, _ = cv2.findContours(blue_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 for cnt in contours_blue:
                     area = cv2.contourArea(cnt)
-                    if 50 < area < 2000:
+                    if 200 < area < 2000:
                         M = cv2.moments(cnt)
                         if M["m00"] != 0:
                             cx = int(M["m10"] / M["m00"])
                             cy = int(M["m01"] / M["m00"])
                             blue_detections.append((cx, cy))
 
-                logger.debug("Updating candidates")
+                # logger.debug("Updating candidates")
                 update_candidates(red_candidates, red_detections)
                 update_candidates(blue_candidates, blue_detections)
 
-                logger.debug("Drawing markers on frame")
+                # logger.debug("Drawing markers on frame")
                 for cand in red_candidates:
                     if cand['count'] >= STABLE_COUNT_THRESHOLD:
                         cv2.drawMarker(frame, (int(cand['x']), int(cand['y'])), (0, 0, 255),
@@ -240,7 +229,7 @@ class DetectionWorker(QtCore.QThread):
                         cv2.drawMarker(frame, (int(cand['x']), int(cand['y'])), (255, 0, 0),
                                        markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
 
-                logger.debug("Checking stable detections")
+                # logger.debug("Checking stable detections")
                 stable_red = [cand for cand in red_candidates if cand['count'] >= STABLE_COUNT_THRESHOLD]
                 stable_blue = [cand for cand in blue_candidates if cand['count'] >= STABLE_COUNT_THRESHOLD]
                 if len(stable_red) == 3 and len(stable_blue) == 1:
@@ -248,10 +237,10 @@ class DetectionWorker(QtCore.QThread):
                         condition_start_time = time.time()
                     elapsed = time.time() - condition_start_time
                     progress = int((elapsed / STABLE_DURATION) * 100)
-                    logger.debug(f"Emitting progress: {progress}")
+                    # logger.debug(f"Emitting progress: {progress}")
                     self.update_progress.emit(progress)
                     if elapsed >= STABLE_DURATION:
-                        logger.debug("Processing stable detection")
+                        # logger.debug("Processing stable detection")
                         original = frame.copy()
                         all_candidates = stable_red + stable_blue
                         pts = np.array([(int(cand['x']), int(cand['y'])) for cand in all_candidates], dtype="float32")
@@ -259,6 +248,10 @@ class DetectionWorker(QtCore.QThread):
                         dst_pts = np.array([[0, 0], [499, 0], [499, 499], [0, 499]], dtype="float32")
                         M_persp = cv2.getPerspectiveTransform(ordered_pts, dst_pts)
                         warped = cv2.warpPerspective(frame, M_persp, (500, 500))
+
+                        # Crop the warped image
+                        crop_margin = 15
+                        warped = warped[crop_margin:-crop_margin, crop_margin:-crop_margin]
                         blue_pt = np.array([int(stable_blue[0]['x']), int(stable_blue[0]['y'])], dtype="float32")
                         distances = [np.linalg.norm(blue_pt - pt) for pt in ordered_pts]
                         blue_index = int(np.argmin(distances))
@@ -271,20 +264,20 @@ class DetectionWorker(QtCore.QThread):
                         elif rotations_needed == 3:
                             rotated = cv2.rotate(warped, cv2.ROTATE_90_COUNTERCLOCKWISE)
                         
-                        logger.debug("Cropping and matching")
+                        # logger.debug("Cropping and matching")
                         original_cropped = crop_center_square(original)
                         success, message, inter_images = self.process_and_match(rotated, original_cropped)
-                        logger.debug("Emitting right images")
+                        # logger.debug("Emitting right images")
                         self.update_right_images.emit(inter_images)
                         if success:
-                            logger.debug("Success: Activating relays")
+                            # logger.debug("Success: Activating relays")
                             relay1.on()
                             relay2.on()
                             self.detection_complete.emit(True, message, self.convert_cv_qt(rotated))
                             self.waiting_for_reset = True
                             self.reset_mode = "manual"
                         else:
-                            logger.debug("Failure: Emitting detection complete")
+                            # logger.debug("Failure: Emitting detection complete")
                             self.detection_complete.emit(False, message, self.convert_cv_qt(rotated))
                             self.msleep(10000)
                             self.show_message.emit("")
@@ -294,14 +287,14 @@ class DetectionWorker(QtCore.QThread):
                             blue_candidates.clear()
                 else:
                     condition_start_time = None
-                    logger.debug("Resetting progress")
+                    # logger.debug("Resetting progress")
                     self.update_progress.emit(0)
 
-                logger.debug("Emitting main image")
+                # logger.debug("Emitting main image")
                 qimg = self.convert_cv_qt(frame)
                 if not qimg.isNull():
                     self.update_main_image.emit(qimg)
-                    logger.debug("Main image emitted successfully")
+                    # logger.debug("Main image emitted successfully")
                 else:
                     logger.error("Skipping emission due to null QImage")
                 self.msleep(30)
@@ -317,7 +310,7 @@ class DetectionWorker(QtCore.QThread):
 
     def convert_cv_qt(self, cv_img, isGray=False, target_size=None):
         try:
-            logger.debug("Starting convert_cv_qt")
+            # logger.debug("Starting convert_cv_qt")
             if cv_img is None or cv_img.size == 0:
                 logger.error("Input cv_img is None or empty")
                 return QtGui.QImage()
@@ -328,13 +321,13 @@ class DetectionWorker(QtCore.QThread):
             if isGray:
                 qformat = QtGui.QImage.Format_Grayscale8
             else:
-                logger.debug("Converting BGR to RGB")
+                # logger.debug("Converting BGR to RGB")
                 cv_img_copy = cv2.cvtColor(cv_img_copy, cv2.COLOR_BGR2RGB)
                 qformat = QtGui.QImage.Format_RGB888
             
             h, w = cv_img_copy.shape[:2]
             bytes_per_line = w if isGray else 3 * w
-            logger.debug(f"Creating QImage: {w}x{h}, bytes_per_line={bytes_per_line}")
+            # logger.debug(f"Creating QImage: {w}x{h}, bytes_per_line={bytes_per_line}")
             qt_img = QtGui.QImage(cv_img_copy.data, w, h, bytes_per_line, qformat).copy()  # Deep copy
             
             if qt_img.isNull():
@@ -342,13 +335,13 @@ class DetectionWorker(QtCore.QThread):
                 return QtGui.QImage()
             
             if target_size:
-                logger.debug(f"Scaling to {target_size}")
+                # logger.debug(f"Scaling to {target_size}")
                 qt_img = qt_img.scaled(target_size[0], target_size[1], Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 if qt_img.isNull():
                     logger.error("Scaled QImage is null")
                     return QtGui.QImage()
             
-            logger.debug("convert_cv_qt completed successfully")
+            # logger.debug("convert_cv_qt completed successfully")
             return qt_img
         except Exception as e:
             logger.error(f"Exception in convert_cv_qt: {str(e)}", exc_info=True)
@@ -362,18 +355,26 @@ class DetectionWorker(QtCore.QThread):
             grid = np.zeros((5, 5), dtype=int)
             step_x, step_y = width // 5, height // 5
 
+            # for i in range(5):
+            #     for j in range(5):
+            #         x0, y0 = j * step_x, i * step_y
+            #         cell = rotated_gray[y0:y0+step_y, x0:x0+step_x]
+            #         _, thresh = cv2.threshold(cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            #         cy, cx = step_y // 2, step_x // 2
+            #         grid[i, j] = 1 if thresh[cy, cx] < 128 else 0
             for i in range(5):
                 for j in range(5):
                     x0, y0 = j * step_x, i * step_y
                     cell = rotated_gray[y0:y0+step_y, x0:x0+step_x]
                     _, thresh = cv2.threshold(cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                    cy, cx = step_y // 2, step_x // 2
-                    grid[i, j] = 1 if thresh[cy, cx] < 128 else 0
+                    black_pixels = np.sum(thresh < 10)
+                    grid[i, j] = 1 if black_pixels > 1200 else 0
+                    print(f"row {i} col {j} black {black_pixels}")
 
             # Determine the absolute path to solution.csv
             script_dir = os.path.dirname(os.path.abspath(__file__))
             solution_path = os.path.join(script_dir, 'solution.csv')
-            logger.debug(f"Loading solution.csv from: {solution_path}")
+            # logger.debug(f"Loading solution.csv from: {solution_path}")
 
             # Load solution.csv as strings
             solution_df = pd.read_csv(solution_path, header=None, dtype=str)
@@ -434,15 +435,18 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("Image Detection Interface")
         self.resize(1200, 700)
+        self.setCursor(QtGui.QCursor(QtCore.Qt.BlankCursor))
         self.initUI()
 
     def showEvent(self, event):
         super().showEvent(event)
+        self.activateWindow()
+        self.raise_()
         if not hasattr(self, "_fullscreened"):
             self.setWindowState(self.windowState() | Qt.WindowFullScreen)  # Still disabled for debugging
             self._fullscreened = True
-            QtCore.QTimer.singleShot(1000, self.start_worker)  # Delay by 1 second
-            self.setCursor(Qt.BlankCursor)
+            QtCore.QTimer.singleShot(1000, self.start_worker)  # Delay by 1 secon
+
 
     def start_worker(self):
         self.worker = DetectionWorker()
@@ -667,4 +671,6 @@ if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     window = MainWindow()
     window.show()
+    # window.activateWindow()
+    # window.raise_()
     sys.exit(app.exec_())
