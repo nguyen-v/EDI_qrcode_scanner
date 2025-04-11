@@ -362,14 +362,14 @@ class DetectionWorker(QtCore.QThread):
             #         _, thresh = cv2.threshold(cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             #         cy, cx = step_y // 2, step_x // 2
             #         grid[i, j] = 1 if thresh[cy, cx] < 128 else 0
-            edge_px = 15
+            edge_px = 30
             for i in range(5):
                 for j in range(5):
                     x0, y0 = j * step_x, i * step_y
                     cell = rotated_gray[y0+edge_px:y0+step_y-edge_px, x0+edge_px:x0+step_x-edge_px]
                     _, thresh = cv2.threshold(cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                     black_pixels = np.sum(thresh < 10)
-                    grid[i, j] = 1 if black_pixels > 800 else 0
+                    grid[i, j] = 1 if black_pixels > 400 else 0
                     print(f"row {i} col {j} black {black_pixels}")
 
             # Determine the absolute path to solution.csv
